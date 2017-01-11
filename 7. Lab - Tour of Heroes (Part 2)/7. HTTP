@@ -1,0 +1,863 @@
+Our stakeholders appreciate our progress.
+Now they want to get the hero data from a server, let users add, edit, and delete heroes,
+and save these changes back to the server.
+
+In this chapter we teach our application to make the corresponding HTTP calls to a remote server's web API.
+
+## Where We Left Off
+
+In the previous chapter, we learned to navigate between the dashboard and the fixed heroes list, editing a selected hero along the way.
+That's our starting point for this chapter.
+
+### Keep the app transpiling and running
+
+Open a terminal/console window and enter the following command to
+start the TypeScript compiler, start the server, and watch for changes:
+
+```shell
+  npm start
+```
+
+The application runs and updates automatically as we continue to build the Tour of Heroes.
+
+# Providing HTTP Services
+The `HttpModule` is ***not*** a core Angular module.
+It's Angular's optional approach to web access and it exists as a separate add-on module called `@angular/http`,
+shipped in a separate script file as part of the Angular npm package.
+
+Fortunately we're ready to import from `@angular/http` because `systemjs.config` configured *SystemJS* to load that library when we need it.
+
+### Register for HTTP services
+
+Our app will depend upon the Angular `http` service which itself depends upon other supporting services.
+The `HttpModule` from `@angular/http` library holds providers for a complete set of HTTP services.
+
+We should be able to access these services from anywhere in the application.
+So we register them all by adding `HttpModule` to the `imports` list of the `AppModule` where we
+bootstrap the application and its root `AppComponent`.
+
+
+```TypeScript
+  import { NgModule }      from '@angular/core';
+  import { BrowserModule } from '@angular/platform-browser';
+  import { FormsModule }   from '@angular/forms';
+  import { HttpModule }    from '@angular/http';
+  import { AppRoutingModule } from './app-routing.module';
+  import { AppComponent }         from './app.component';
+  import { DashboardComponent }   from './dashboard.component';
+  import { HeroesComponent }      from './heroes.component';
+  import { HeroDetailComponent }  from './hero-detail.component';
+  import { HeroService }          from './hero.service';
+
+  @NgModule({
+    imports: [
+      BrowserModule,
+      FormsModule,
+      HttpModule,
+      AppRoutingModule
+    ],
+    declarations: [
+      AppComponent,
+      DashboardComponent,
+      HeroDetailComponent,
+      HeroesComponent,
+    ],
+    providers: [ HeroService ],
+    bootstrap: [ AppComponent ]
+  })
+  export class AppModule { }
+```
+
+Notice that we supply `HttpModule` as part of the *imports* array in root NgModule `AppModule`.
+
+## Simulating the web API
+
+We recommend registering application-wide services in the root
+`AppModule` *providers*.
+
+Our application is in the early stages of development and far from ready for production.
+We don't even have a web server that can handle requests for heroes.
+Until we do, *we'll have to fake it*.
+
+We're going to *trick* the HTTP client into fetching and saving data from
+a mock service, the *in-memory web API*.
+
+Here is a version of <span ngio-ex>appModuleTsVsMainTs</span> that performs this trick:
+
+```TypeScript
+  import { NgModule }      from '@angular/core';
+  import { BrowserModule } from '@angular/platform-browser';
+  import { FormsModule }   from '@angular/forms';
+  import { HttpModule }    from '@angular/http';
+
+  import { AppRoutingModule } from './app-routing.module';
+
+  // Imports for loading & configuring the in-memory web api
+  import { InMemoryWebApiModule } from 'angular-in-memory-web-api';
+  import { InMemoryDataService }  from './in-memory-data.service';
+
+  import { AppComponent }         from './app.component';
+  import { DashboardComponent }   from './dashboard.component';
+  import { HeroesComponent }      from './heroes.component';
+  import { HeroDetailComponent }  from './hero-detail.component';
+  import { HeroService }          from './hero.service';
+
+  @NgModule({
+    imports: [
+      BrowserModule,
+      FormsModule,
+      HttpModule,
+      InMemoryWebApiModule.forRoot(InMemoryDataService),
+      AppRoutingModule
+    ],
+    declarations: [
+      AppComponent,
+      DashboardComponent,
+      HeroDetailComponent,
+      HeroesComponent,
+    ],
+    providers: [ HeroService ],
+    bootstrap: [ AppComponent ]
+  })
+  export class AppModule { }
+```
+
+Rather than require a real API server, this example simulates communication with the remote server by adding the
+<a href="https://github.com/angular/in-memory-web-api" target="_blank" title="In-memory Web API"><i>InMemoryWebApiModule</i></a>
+to the module `imports`, effectively  replacing the `Http` client's XHR backend service with an in-memory alternative.
+
+```TypeScript
+  InMemoryWebApiModule.forRoot(InMemoryDataService),
+```
+
+The `forRoot` configuration method takes an `InMemoryDataService` class
+that primes the in-memory database as follows:
+
+```TypeScript
+  import { InMemoryDbService } from 'angular-in-memory-web-api';
+
+  export class InMemoryDataService implements InMemoryDbService {
+    createDb() {
+      let heroes = [
+        {id: 11, name: 'Mr. Nice'},
+        {id: 12, name: 'Narco'},
+        {id: 13, name: 'Bombasto'},
+        {id: 14, name: 'Celeritas'},
+        {id: 15, name: 'Magneta'},
+        {id: 16, name: 'RubberMan'},
+        {id: 17, name: 'Dynama'},
+        {id: 18, name: 'Dr IQ'},
+        {id: 19, name: 'Magma'},
+        {id: 20, name: 'Tornado'}
+      ];
+      return {heroes};
+    }
+  }
+```
+
+This file replaces the `mock-heroes.ts` which is now safe to delete.
+
+> This chapter is an introduction to the Angular_http_library.
+Please don't be distracted by the details of this backend substitution. Just follow along with the example.
+
+## Heroes and HTTP
+
+Look at our current `HeroService` implementation
+
+```TypeScript
+  getHeroes(): Promise<Hero[]> {
+    return Promise.resolve(HEROES);
+  }
+```
+
+We returned a Promise resolved with mock heroes.
+It may have seemed like overkill at the time, but we were anticipating the
+day when we fetched heroes with an HTTP client and we knew that would have to be an asynchronous operation.
+
+That day has arrived! Let's convert `getHeroes()` to use HTTP.
+
+```TypeScript
+  private heroesUrl = 'api/heroes';  // URL to web api
+
+  constructor(private http: Http) { }
+
+  getHeroes(): Promise<Hero[]> {
+    return this.http.get(this.heroesUrl)
+               .toPromise()
+               .then(response => response.json().data as Hero[])
+               .catch(this.handleError);
+  }
+
+  private handleError(error: any): Promise<any> {
+    console.error('An error occurred', error); // for demo purposes only
+    return Promise.reject(error.message || error);
+  }
+```
+
+Our updated import statements are now:
+
+```TypeScript
+  import { Injectable }    from '@angular/core';
+  import { Headers, Http } from '@angular/http';
+
+  import 'rxjs/add/operator/toPromise';
+
+  import { Hero } from './hero';
+```
+
+Refresh the browser, and the hero data should be successfully loaded from the
+mock server.
+
+###HTTP Promise
+
+We're still returning a Promise but we're creating it differently.
+
+The Angular `http.get` returns an RxJS `Observable`.
+*Observables* are a powerful way to manage asynchronous data flows.
+We'll learn about observables later in this chapter.
+
+For *now* we get back on familiar ground by immediately
+converting that `Observable` to a `Promise` using the `toPromise` operator.
+
+```
+  .toPromise()
+```
+
+Unfortunately, the Angular `Observable` doesn't have a `toPromise` operator ...
+not out of the box.
+The Angular `Observable` is a bare-bones implementation.
+
+There are scores of operators like `toPromise` that extend `Observable` with useful capabilities.
+If we want those capabilities, we have to add the operators ourselves.
+That's as easy as importing them from the RxJS library like this:
+
+```TypeScript
+  import 'rxjs/add/operator/toPromise';
+```
+
+You'll add more operators, and learn why you must do so, later in this tutorial.
+
+### Extracting the data in the *then* callback
+
+In the *promise*'s `then` callback we call the `json` method of the HTTP `Response` to extract the
+data within the response.
+
+```TypeScript
+  .then(response => response.json().data as Hero[])
+```
+
+That response JSON has a single `data` property.
+The `data` property holds the array of *heroes* that the caller really wants.
+So we grab that array and return it as the resolved Promise value.
+
+> Pay close attention to the shape of the data returned by the server.
+This particular *in-memory web API* example happens to return an object with a `data` property.
+Your API might return something else. Adjust the code to match *your web API*.
+
+The caller is unaware of these machinations. It receives a Promise of *heroes* just as it did before.
+It has no idea that we fetched the heroes from the (mock) server.
+It knows nothing of the twists and turns required to convert the HTTP response into heroes.
+Such is the beauty and purpose of delegating data access to a service like this `HeroService`.
+
+### Error Handling
+
+At the end of `getHeroes()` we `catch` server failures and pass them to an error handler:
+
+```
+  .catch(this.handleError);
+```
+
+This is a critical step!
+We must anticipate HTTP failures as they happen frequently for reasons beyond our control.
+
+```TypeScript
+  private handleError(error: any): Promise<any> {
+    console.error('An error occurred', error); // for demo purposes only
+    return Promise.reject(error.message || error);
+  }
+```
+
+In this demo service we log the error to the console; we would do better in real life.
+
+We've also decided to return a user friendly form of the error to
+the caller in a rejected promise so that the caller can display a proper error message to the user.
+
+### Get hero by id
+The `HeroDetailComponent` asks the `HeroService` to fetch a single hero to edit.
+
+The `HeroService` currently fetches all heroes and then finds the desired hero
+by filtering for the one with the matching `id`.
+That's fine in a simulation. It's wasteful to ask a real server for _all_ heroes when we only want one.
+Most web APIs support a _get-by-id_ request in the form `api/hero/:id` (e.g., `api/hero/11`).
+
+Update the `HeroService.getHero` method to make a _get-by-id_ request,
+applying what we just learned to write `getHeroes`:
+
+```TypeScript
+  getHero(id: number): Promise<Hero> {
+    const url = `${this.heroesUrl}/${id}`;
+    return this.http.get(url)
+      .toPromise()
+      .then(response => response.json().data as Hero)
+      .catch(this.handleError);
+  }
+```
+
+It's almost the same as `getHeroes`.
+The URL identifies _which_ hero the server should update by encoding the hero id into the URL
+to match the `api/hero/:id` pattern.
+
+We also adjust to the fact that the `data` in the response is a single hero object rather than an array.
+
+### Unchanged _getHeroes_ API
+
+Although we made significant *internal* changes to `getHeroes()` and `getHero()`,
+the public signatures did not change.
+We still return a Promise from both methods.
+We won't have to update any of the components that call them.
+
+Our stakeholders are thrilled with the web API integration so far.
+Now they want the ability to create and delete heroes.
+
+Let's see first what happens when we try to update a hero's details.
+
+## Update hero details
+
+We can edit a hero's name already in the hero detail view. Go ahead and try
+it. As we type, the hero name is updated in the view heading.
+But when we hit the `Back` button, the changes are lost!
+
+Updates weren't lost before. What changed?
+When the app used a list of mock heroes, updates were applied directly to the
+hero objects within the single, app-wide, shared list. Now that we are fetching data
+from a server, if we want changes to persist, we'll need to write them back to
+the server.
+
+### Save hero details
+
+Let's ensure that edits to a hero's name aren't lost. Start by adding,
+to the end of the hero detail template, a save button with a `click` event
+binding that invokes a new component method named `save`:
+
+```html
+  <button (click)="save()">Save</button>
+```
+
+The `save` method persists hero name changes using the hero service
+`update` method and then navigates back to the previous view:
+
+```TypeScript
+  save(): void {
+    this.heroService.update(this.hero)
+      .then(() => this.goBack());
+  }
+```
+
+### Hero service `update` method
+
+The overall structure of the `update` method is similar to that of
+`getHeroes`, although we'll use an HTTP _put_ to persist changes
+server-side:
+
+```TypeScript
+  private headers = new Headers({'Content-Type': 'application/json'});
+
+  update(hero: Hero): Promise<Hero> {
+    const url = `${this.heroesUrl}/${hero.id}`;
+    return this.http
+      .put(url, JSON.stringify(hero), {headers: this.headers})
+      .toPromise()
+      .then(() => hero)
+      .catch(this.handleError);
+  }
+```
+
+We identify _which_ hero the server should update by encoding the hero id in
+the URL. The put body is the JSON string encoding of the hero, obtained by
+calling `JSON_stringify`.  We identify the body content type
+(`application/json`) in the request header.
+
+Refresh the browser and give it a try. Changes to hero names should now persist.
+
+## Add a hero
+
+To add a new hero we need to know the hero's name. Let's use an input
+element for that, paired with an add button.
+
+Insert the following into the heroes component HTML, first thing after
+the heading:
+
+```html
+  <div>
+    <label>Hero name:</label> <input #heroName />
+    <button (click)="add(heroName.value); heroName.value=''">
+      Add
+    </button>
+  </div>
+```
+
+In response to a click event, we call the component's click handler and then
+clear the input field so that it will be ready to use for another name.
+
+```TypeScript
+  add(name: string): void {
+    name = name.trim();
+    if (!name) { return; }
+    this.heroService.create(name)
+      .then(hero => {
+        this.heroes.push(hero);
+        this.selectedHero = null;
+      });
+  }
+```
+
+When the given name is non-blank, the handler delegates creation of the
+named hero to the hero service, and then adds the new hero to our array.
+
+Finally, we implement the `create` method in the `HeroService` class.
+
+```TypeScript
+  create(name: string): Promise<Hero> {
+    return this.http
+      .post(this.heroesUrl, JSON.stringify({name: name}), {headers: this.headers})
+      .toPromise()
+      .then(res => res.json().data)
+      .catch(this.handleError);
+  }
+```
+
+Refresh the browser and create some new heroes!
+
+## Delete a hero
+
+Too many heroes?
+Let's add a delete button to each hero in the heroes view.
+
+Add this button element to the heroes component HTML, right after the hero
+name in the repeated `<li>` tag:
+
+```html
+  <button class="delete"
+    (click)="delete(hero); $event.stopPropagation()">x</button>
+```
+
+The `<li>` element should now look like this:
+
+```html
+  <li *ngFor="let hero of heroes" (click)="onSelect(hero)"
+      [class.selected]="hero === selectedHero">
+    <span class="badge">{{hero.id}}</span>
+    <span>{{hero.name}}</span>
+    <button class="delete"
+      (click)="delete(hero); $event.stopPropagation()">x</button>
+  </li>
+```
+
+In addition to calling the component's `delete` method, the delete button
+click handling code stops the propagation of the click event &mdash; we
+don't want the `<li>` click handler to be triggered because that would
+select the hero that we are going to delete!
+
+The logic of the `delete` handler is a bit trickier:
+
+```TypeScript
+  delete(hero: Hero): void {
+    this.heroService
+        .delete(hero.id)
+        .then(() => {
+          this.heroes = this.heroes.filter(h => h !== hero);
+          if (this.selectedHero === hero) { this.selectedHero = null; }
+        });
+  }
+```
+
+Of course, we delegate hero deletion to the hero service, but the component
+is still responsible for updating the display: it removes the deleted hero
+from the array and resets the selected hero if necessary.
+
+We want our delete button to be placed at the far right of the hero entry.
+This extra CSS accomplishes that:
+
+```css
+  button.delete {
+    float:right;
+    margin-top: 2px;
+    margin-right: .8em;
+    background-color: gray !important;
+    color:white;
+  }
+```
+
+### Hero service `delete` method
+
+The hero service's `delete` method uses the _delete_ HTTP method to remove the hero from the server:
+
+```TypeScript
+  delete(id: number): Promise<void> {
+    const url = `${this.heroesUrl}/${id}`;
+    return this.http.delete(url, {headers: this.headers})
+      .toPromise()
+      .then(() => null)
+      .catch(this.handleError);
+  }
+```
+
+Refresh the browser and try the new delete functionality.
+
+## Observables
+
+Each `Http` service method  returns an `Observable` of HTTP `Response` objects.
+
+Our `HeroService` converts that `Observable` into a `Promise` and returns the promise to the caller.
+In this section we learn to return the `Observable` directly and discuss when and why that might be
+a good thing to do.
+
+### Background
+An *observable* is a stream of events that we can process with array-like operators.
+
+Angular core has basic support for observables.
+We developers augment that support with operators and extensions from the
+<a href="http://reactivex.io/rxjs" target="_blank" title="RxJS">RxJS library</a>.
+We'll see how shortly.
+
+Recall that our `HeroService` quickly chained the `toPromise` operator to the `Observable` result of `http.get`.
+That operator converted the `Observable` into a `Promise` and we passed that promise back to the caller.
+
+Converting to a promise is often a good choice. We typically ask `http.get` to fetch a single chunk of data.
+When we receive the data, we're done.
+A single result in the form of a promise is easy for the calling component to consume
+and it helps that promises are widely understood by JavaScript programmers.
+
+But requests aren't always "one and done". We may start one request,
+then cancel it, and make a different request before the server has responded to the first request.
+Such a _request-cancel-new-request_ sequence is difficult to implement with *Promises*.
+It's easy with *Observables* as we'll see.
+
+### Search-by-name
+We're going to add a *hero search* feature to the Tour of Heroes.
+As the user types a name into a search box, we'll make repeated HTTP requests for heroes filtered by that name.
+
+We start by creating `HeroSearchService` that sends search queries to our server's web api.
+
+```TypeScript
+  import { Injectable }     from '@angular/core';
+  import { Http, Response } from '@angular/http';
+  import { Observable } from 'rxjs';
+  import { Hero }           from './hero';
+
+  @Injectable()
+  export class HeroSearchService {
+    constructor(private http: Http) {}
+    search(term: string): Observable<Hero[]> {
+      return this.http
+                 .get(`app/heroes/?name=${term}`)
+                 .map((r: Response) => r.json().data as Hero[]);
+    }
+  }
+```
+
+The `privhttp.get()` call in `HeroSearchService` is similar to the one
+in the `HeroService`, although the URL now has a query string.
+
+<span if-docs="ts">A more important difference: we no longer call `toPromise`.
+Instead we return the *observable* from the the `htttp.get`,
+after chaining it to another RxJS operator, <code>map</code>,
+to extract heroes from the response data.
+
+RxJS operator chaining makes response processing easy and readable.
+See the [discuss below about operators](#rxjs-imports).
+</span>
+
+### HeroSearchComponent
+
+Let's create a new `HeroSearchComponent` that calls this new `HeroSearchService`.
+
+The component template is simple &mdash; just a text box and a list of matching search results.
+
+```html
+<!-- app/hero-search.component.html -->
+  <div id="search-component">
+    <h4>Hero Search</h4>
+    <input #searchBox id="search-box" (keyup)="search(searchBox.value)" />
+    <div>
+      <div *ngFor="let hero of heroes | async"
+           (click)="gotoDetail(hero)" class="search-result" >
+        {{hero.name}}
+      </div>
+    </div>
+  </div>
+```
+
+We'll also want to add styles for the new component.
+
+```css
+/*app/hero-search.component.css*/
+  .search-result{
+    border-bottom: 1px solid gray;
+    border-left: 1px solid gray;
+    border-right: 1px solid gray;
+    width:195px;
+    height: 20px;
+    padding: 5px;
+    background-color: white;
+    cursor: pointer;
+  }
+  #search-box{
+    width: 200px;
+    height: 20px;
+  }
+```
+
+As the user types in the search box, a *keyup* event binding calls the component's `search` method with the new search box value.
+
+The `*ngFor` repeats *hero* objects from the component's `heroes` property. No surprise there.
+
+But, as we'll soon see, the `heroes` property is now an *Observable* of hero arrays, rather than just a hero array.
+The `*ngFor` can't do anything with an `Observable` until we flow it through the `async` pipe (`AsyncPipe`).
+The `async` pipe subscribes to the `Observable` and produces the array of heroes to `*ngFor`.
+
+Time to create the `HeroSearchComponent` class and metadata.
+
+```TypeScript
+// app/hero-search.component.ts
+
+  import { Component, OnInit } from '@angular/core';
+  import { Router }            from '@angular/router';
+  import { Observable }        from 'rxjs/Observable';
+  import { Subject }           from 'rxjs/Subject';
+  import { HeroSearchService } from './hero-search.service';
+  import { Hero } from './hero';
+
+  @Component({
+    moduleId: module.id,
+    selector: 'hero-search',
+    templateUrl: 'hero-search.component.html',
+    styleUrls: [ 'hero-search.component.css' ],
+    providers: [HeroSearchService]
+  })
+  export class HeroSearchComponent implements OnInit {
+    heroes: Observable<Hero[]>;
+    private searchTerms = new Subject<string>();
+    constructor(
+      private heroSearchService: HeroSearchService,
+      private router: Router) {}
+    // Push a search term into the observable stream.
+    search(term: string): void {
+      this.searchTerms.next(term);
+    }
+    ngOnInit(): void {
+      this.heroes = this.searchTerms
+        .debounceTime(300)        // wait for 300ms pause in events
+        .distinctUntilChanged()   // ignore if next search term is same as previous
+        .switchMap(term => term   // switch to new observable each time
+          // return the http search observable
+          ? this.heroSearchService.search(term)
+          // or the observable of empty heroes if no search term
+          : Observable.of<Hero[]>([]))
+        .catch(error => {
+          // TODO: real error handling
+          console.log(error);
+          return Observable.of<Hero[]>([]);
+        });
+    }
+    gotoDetail(hero: Hero): void {
+      let link = ['/detail', hero.id];
+      this.router.navigate(link);
+    }
+  }
+```
+
+#### Search terms
+
+Let's focus on the `searchTerms`:
+
+```TypeScript
+  private searchTerms = new Subject<string>();
+
+  // Push a search term into the observable stream.
+  search(term: string): void {
+    this.searchTerms.next(term);
+  }
+```
+
+A `Subject` is a producer of an _observable_ event stream;
+`searchTerms` produces an `Observable` of strings, the filter criteria for the name search.
+
+Each call to `search` puts a new string into this subject's _observable_ stream by calling `next`.
+
+#### Initialize the _**heroes**_ property (_**ngOnInit**_)
+
+A `Subject` is also an `Observable`.
+We're going to turn the stream
+of search terms into a stream of `Hero` arrays and assign the result to the `heroes` property.
+
+```TypeScript
+  heroes: Observable<Hero[]>;
+
+  ngOnInit(): void {
+    this.heroes = this.searchTerms
+      .debounceTime(300)        // wait for 300ms pause in events
+      .distinctUntilChanged()   // ignore if next search term is same as previous
+      .switchMap(term => term   // switch to new observable each time
+        // return the http search observable
+        ? this.heroSearchService.search(term)
+        // or the observable of empty heroes if no search term
+        : Observable.of<Hero[]>([]))
+      .catch(error => {
+        // TODO: real error handling
+        console.log(error);
+        return Observable.of<Hero[]>([]);
+      });
+  }
+```
+
+If we passed every user keystroke directly to the `HeroSearchService`, we'd unleash a storm of HTTP requests.
+Bad idea. We don't want to tax our server resources and burn through our cellular network data plan.
+
+Fortunately, we can chain `Observable` operators to the string `Observable` that reduce the request flow.
+We'll make fewer calls to the `HeroSearchService` and still get timely results. Here's how:
+
+* `debounceTime(300)` waits until the flow of new string events pauses for 300 milliseconds
+before passing along the latest string. We'll never make requests more frequently than 300ms.
+
+* `distinctUntilChanged` ensures that we only send a request if the filter text changed.
+There's no point in repeating a request for the same search term.
+
+* `switchMap` calls our search service for each search term that makes it through the `debounce` and `distinctUntilChanged` gauntlet.
+It cancels and discards previous search observables, returning only the latest search service observable.
+
+> The [switchMap operator](http://www.learnrxjs.io/operators/transformation/switchmap.html)
+(formerly known as "flatMapLatest") is very clever.
+
+> Every qualifying key event can trigger an `http` method call.
+Even with a 300ms pause between requests, we could have multiple HTTP requests in flight
+and they may not return in the order sent.
+
+> `switchMap` preserves the original request order while returning
+only the observable from the most recent `http` method call.
+Results from prior calls are canceled and discarded.
+
+> We also short-circuit the `http` method call and return an observable containing an empty array
+if the search text is empty.
+
+> Note that _canceling_ the `HeroSearchService` observable won't actually abort a pending HTTP request
+until the service supports that feature, a topic for another day.
+We are content for now to discard unwanted results.
+:marked
+
+* `catch` intercepts a failed observable.
+Our simple example prints the error to the console; a real life application should do better.
+Then we return an observable containing an empty array to clear the search result.
+
+### Import RxJS operators
+
+The RxJS operators are not available in Angular's base `Observable` implementation. We have to extend `Observable` by importing them.
+We could extend Observable with just the operators we need here by including the pertinent import statements at the top of this file.
+We take a different approach in this example. We combine all of the RxJS `Observable` extensions that our entire app requires into a single RxJS imports file.
+
+```TypeScript
+// app rxjs-extensions.ts
+  // Observable class extensions
+  import 'rxjs/add/observable/of';
+  import 'rxjs/add/observable/throw';
+
+  // Observable operators
+  import 'rxjs/add/operator/catch';
+  import 'rxjs/add/operator/debounceTime';
+  import 'rxjs/add/operator/distinctUntilChanged';
+  import 'rxjs/add/operator/do';
+  import 'rxjs/add/operator/filter';
+  import 'rxjs/add/operator/map';
+  import 'rxjs/add/operator/switchMap';
+```
+
+We load them all at once by importing `rxjs-extensions` at the top of `AppModule`.
+
+```TypeScript
+// app/app.module.ts
+  import './rxjs-extensions';
+```
+
+### Add the search component to the dashboard
+
+We add the hero search HTML element to the bottom of the `DashboardComponent` template.
+
+```html
+<!-- app/dashboard.component.html -->
+  <h3>Top Heroes</h3>
+  <div class="grid grid-pad">
+    <a *ngFor="let hero of heroes"  [routerLink]="['/detail', hero.id]"  class="col-1-4">
+      <div class="module hero">
+        <h4>{{hero.name}}</h4>
+      </div>
+    </a>
+  </div>
+  <hero-search></hero-search>
+```
+
+Finally, we import `HeroSearchComponent` from `hero-search.component.ts`
+and add it to the `declarations` array:
+
+```TypeScript
+// app/app.module.ts
+
+  declarations: [
+    AppComponent,
+    DashboardComponent,
+    HeroDetailComponent,
+    HeroesComponent,
+    HeroSearchComponent
+  ],
+```
+
+Run the app again, go to the *Dashboard*, and enter some text in the search box.
+At some point it might look like this.
+
+![Hero Search Component](https://angular.io/resources/images/devguide/toh/toh-hero-search.png)
+
+## Application structure and code
+
+Verify that we have the following structure:
+
+```
+angular-tour-of-heroes
+├── app
+|   ├── app.component.css
+|   ├── app.component.ts
+|   ├── app.module.ts
+|   ├── app-routing.module.ts
+|   ├── dashboard.component.css
+|   ├── dashboard.component.html
+|   ├── dashboard.component.ts
+|   ├── hero.service.ts
+|   ├── hero.ts
+|   ├── hero-detail.component.css
+|   ├── hero-detail.component.html
+|   ├── hero-detail.component.ts
+|   ├── hero-search.component.css
+|   ├── hero-search.component.html
+|   ├── hero-search.component.ts
+|   ├── hero-search.service.ts
+|   ├── heroes.component.css
+|   ├── heroes.component.html
+|   ├── heroes.component.ts
+|   ├── in-memory-data.service.ts
+|   ├── main.ts
+|   ├── rxjs-extensions.ts
+├── node_modules ...
+├── index.html
+├── package.json
+├── styles.css
+├── systemjs.config.js
+├── tsconfig.json
+```
+
+## Home Stretch
+
+We are at the end of our journey for now, but we have accomplished a lot.
+- We added the necessary dependencies to use HTTP in our application.
+- We refactored `HeroService` to load heroes from a web API.
+- We extended `HeroService` to support post, put and delete methods.
+- We updated our components to allow adding, editing and deleting of heroes.
+- We configured an in-memory web API.
+- We learned how to use Observables.
