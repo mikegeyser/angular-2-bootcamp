@@ -1,3 +1,5 @@
+_[Adapted from Angular 2 Tour of Heroes](https://angular.io/docs/ts/latest/tutorial/)_
+
 Our stakeholders appreciate our progress.
 Now they want to get the hero data from a server, let users add, edit, and delete heroes,
 and save these changes back to the server.
@@ -743,7 +745,6 @@ if the search text is empty.
 > Note that _canceling_ the `HeroSearchService` observable won't actually abort a pending HTTP request
 until the service supports that feature, a topic for another day.
 We are content for now to discard unwanted results.
-:marked
 
 * `catch` intercepts a failed observable.
 Our simple example prints the error to the console; a real life application should do better.
